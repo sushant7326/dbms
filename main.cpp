@@ -427,12 +427,12 @@ public:
                         ins.username_operand,
                         ins.email_operand
                     );
-                    cout << updated << "rows updated successfully." << endl;
+                    cout << updated << "row(s) updated successfully." << endl;
                     pc++;
                     break;
                 } case OpCode::OP_DELETE_WHERE_ID: {
                     int deleted = table.delete_where_id(ins.id_operand);
-                    cout << deleted << "rows deleted successfully." << endl;
+                    cout << deleted << "row(s) deleted successfully." << endl;
                     pc++;
                     break;
                 } case OpCode::OP_HALT: {
@@ -463,7 +463,7 @@ public:
         trim(trimmed);
         if(trimmed[0] == '.') {
             if (trimmed == ".exit") {
-                cout << "Bye!";
+                cout << "Exiting Program.";
                 return false;
             } else {
                 cout << "Unrecognised meta-command: " << trimmed << endl;
