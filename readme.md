@@ -2,28 +2,28 @@
 
 ### INSERT
 ```bash
-db > INSERT 1 abhinav abhinav@example.com
+db > INSERT 1 sushant sushant@123.com
 Row insertion successful.
 
-db > INSERT 2 raj raj@example.com
+db > INSERT 2 singh singh@123.com
 Row insertion successful.
 ```
 
 ### SELECT
 ```bash
 db > SELECT
-(1, abhinav, abhinav@example.com)
-(2, raj, raj@example.com)
+(1, sushant, sushant@123.com)
+(2, singh, singh@123.com)
 Rows: 2
 
 db > SELECT WHERE id = 2
-(2, raj, raj@example.com)
+(2, singh, singh@123.com)
 Rows: 1
 ```
 
 ### UPDATE
 ```bash
-db > UPDATE WHERE id = 2 raj_updated raj2@example.com
+db > UPDATE WHERE id = 2 singh_updated singh2@123.com
 1 row(s) updated successfully.
 ```
 
@@ -33,7 +33,7 @@ db > DELETE WHERE id = 1
 1 row(s) deleted successfully.
 
 db > SELECT
-(2, raj_updated, raj2@example.com)
+(2, singh_updated, singh2@123.com)
 Rows: 1
 ```
 
