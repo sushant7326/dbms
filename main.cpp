@@ -75,6 +75,66 @@ public:
         }
         return updated;
     }
+
+    bool save_to_file(const string &path) const {
+        ofstream out(path, ios::binary | ios::trunc);
+        if (!out) {
+            cout << "Warning: could not open file for saving: " << path << endl;
+            return false;
+        }
+
+        size_t n = rows.size();
+        out.write(reinterpret_cast<const char*>(&n), sizeof(n));
+
+        for (const auto &r: rows) {
+            out.write(reinterpret_cast<const char*>(&r.id), sizeof(r.id));
+
+            uint32_t lenU = static_cast<uint32_t>(r.username.size());
+            uint32_t lenE = static_cast<uint32_t>(r.email.size());
+
+            out.write(reinterpret_cast<const char*>(&lenU), sizeof(lenU));
+            out.write(r.username.data(), lenU);
+            
+            out.write(reinterpret_cast<const char*>(&lenE), sizeof(lenE));
+            out.write(r.email.data(), lenE);
+        }
+
+        return true;
+    }
+
+    bool load_from_file(const string &path) {
+        ifstream in(path, ios::binary);
+        if (!in) {
+            return false;
+        }
+
+        rows.clear();
+        size_t n = 0;
+        if (!in.read(reinterpret_cast<char*>(&n), sizeof(n))) {
+            return false;
+        }
+
+        n = min(n, max_rows);
+
+        for (size_t i = 0; i < n; i++) {
+            Row r;
+            if (!in.read(reinterpret_cast<char*>(&r.id), sizeof(r.id))) break;
+
+            uint32_t lenU = 0, lenE = 0;
+            
+            if (!in.read(reinterpret_cast<char*>(&lenU), sizeof(lenU))) break;
+            r.username.resize(lenU);
+            if (!in.read(&r.username[0], lenU)) break;
+
+            if (!in.read(reinterpret_cast<char*>(&lenE), sizeof(lenE))) break;
+            r.email.resize(lenE);
+            if (!in.read(&r.email[0], lenE)) break;
+
+            rows.push_back(r);
+        }
+
+        return true;
+    }
 };
 
 enum class TokenType {
@@ -446,6 +506,7 @@ public:
 class DatabaseEngine {
 private:
     Table table;
+    string filename;
 
     static void trim(string &s) {
         size_t start = 0;
@@ -456,7 +517,9 @@ private:
     }
 
 public:
-    DatabaseEngine(): table(1000) {}
+    DatabaseEngine(const string &file = "db.data"): table(1000) , filename(file) {
+        table.load_from_file(filename);
+    }
 
     bool handle_input(const string &line) {
         string trimmed = line;
@@ -465,6 +528,7 @@ public:
         
         if(trimmed[0] == '.') {
             if (trimmed == ".exit") {
+                table.save_to_file(filename);
                 cout << "Exiting Program.";
                 return false;
             } else {
