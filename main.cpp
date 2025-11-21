@@ -308,3 +308,137 @@ public:
         return stmt;
     }
 };
+
+enum class OpCode {
+    OP_INSERT,
+    OP_SELECT_ALL,
+    OP_SELECT_WHERE_ID,
+    OP_DELETE_WHERE_ID,
+    OP_UPDATE_WHERE_ID,
+    OP_HALT
+};
+
+struct Instruction {
+    OpCode op;
+    int id_operand{0};
+    string username_operand;
+    string email_operand;
+};
+
+class Program {
+public:
+    vector<Instruction> code;
+
+    void add(const Instruction &ins) {
+        code.push_back(ins);
+    }
+};
+
+class Compiler {
+public:
+    static Program compile(const Statement &stmt) {
+        Program prog;
+
+        switch (stmt.type) {
+            case StatementType::INSERT: {
+                Instruction ins;
+                ins.op = OpCode::OP_INSERT;
+                ins.id_operand = stmt.insertStmt.id;
+                ins.username_operand = stmt.insertStmt.username;
+                ins.email_operand = stmt.insertStmt.email;
+                prog.add(ins);
+                break;
+            } case StatementType::SELECT: {
+                if (stmt.selectStmt.has_where) {
+                    Instruction ins;
+                    ins.op = OpCode::OP_SELECT_WHERE_ID;
+                    ins.id_operand = stmt.selectStmt.where_id;
+                    prog.add(ins);
+                } else {
+                    Instruction ins;
+                    ins.op = OpCode::OP_SELECT_ALL;
+                    prog.add(ins);
+                }
+                break;
+            } case StatementType::DELETE_STMT: {
+                if (stmt.deleteStmt.has_where) {
+                    Instruction ins;
+                    ins.op = OpCode::OP_DELETE_WHERE_ID;
+                    ins.id_operand = stmt.deleteStmt.where_id;
+                    prog.add(ins);
+                }
+                break;
+            } case StatementType::UPDATE: {
+                if (stmt.updateStmt.has_where) {
+                    Instruction ins;
+                    ins.op = OpCode::OP_UPDATE_WHERE_ID;
+                    ins.id_operand = stmt.updateStmt.where_id;
+                    ins.username_operand = stmt.updateStmt.new_username;
+                    ins.email_operand = stmt.updateStmt.new_email;
+                    prog.add(ins);
+                }
+                break;
+            } default: {
+                break;
+            }
+
+            Instruction halt;
+            halt.op = OpCode::OP_HALT;
+            prog.add(halt);
+
+            return prog;
+        }
+    }
+};
+
+class VirtualMachine {
+private:
+    Table &table;
+
+public:
+    VirtualMachine(Table &t): table(t) {}
+
+    void execute(const Program &prog) {
+        size_t pc = 0;
+        while (pc < prog.code.size()) {
+            const Instruction &ins = prog.code[pc];
+            switch (ins.op) {
+                case OpCode::OP_INSERT: {
+                    Row r(ins.id_operand, ins.username_operand, ins.email_operand);
+                    bool ok = table.insert_row(r);
+                    if (ok) {
+                        cout << "Row insertion successful." << endl;
+                    } else {
+                        cout << "Error: Table full, row insertion failed." << endl;
+                    }
+                    pc++;
+                    break;
+                } case OpCode::OP_SELECT_ALL: {
+                    table.select_all();
+                    pc++;
+                    break;
+                } case OpCode::OP_SELECT_WHERE_ID: {
+                    table.select_where_id(ins.id_operand);
+                    pc++;
+                    break;
+                } case OpCode::OP_UPDATE_WHERE_ID: {
+                    int updated = table.update_where_id(
+                        ins.id_operand,
+                        ins.username_operand,
+                        ins.email_operand
+                    );
+                    cout << updated << "rows updated successfully." << endl;
+                    pc++;
+                    break;
+                } case OpCode::OP_DELETE_WHERE_ID: {
+                    int deleted = table.delete_where_id(ins.id_operand);
+                    cout << deleted << "rows deleted successfully." << endl;
+                    pc++;
+                    break;
+                } case OpCode::OP_HALT: {
+                    return;
+                }
+            }
+        }
+    }
+};
