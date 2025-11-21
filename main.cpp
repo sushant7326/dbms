@@ -70,3 +70,57 @@ public:
         return updated;
     }
 };
+
+enum class TokenType {
+    IDENTIFIER,
+    NUMBER,
+    END_OF_INPUT
+};
+
+struct Token {
+    TokenType type;
+    string text;
+};
+
+class Tokenizer {
+private:
+    string input;
+    vector<Token> tokens;
+
+    void add_token(const string &s) {
+        bool is_number = !s.empty() && all_of(s.begin(), s.end(), [](char c) { return isdigit( static_cast<unsigned char>(c)); });
+
+        if (is_number) {
+            tokens.push_back({TokenType::NUMBER, s});
+        } else {
+            tokens.push_back({TokenType::IDENTIFIER, s});
+        }
+    }
+
+public:
+    Tokenizer(const string &inp): input(inp) {}
+
+    const vector<Token> &tokensize() {
+        tokens.clear();
+        string current;
+
+        for (size_t i = 0; i < input.size(); i++) {
+            char c = input[i];
+            if (isspace(static_cast<unsigned char>(c))) {
+                if (!current.empty()) {
+                    add_token(current);
+                    current.clear();
+                }
+            } else {
+                current.push_back(c);
+            }
+        }
+        
+        if (!current.empty()) {
+            add_token(current);
+        }
+        
+        tokens.push_back({TokenType::END_OF_INPUT, ""});
+        return tokens;
+    } 
+};
