@@ -381,13 +381,13 @@ public:
             } default: {
                 break;
             }
-
-            Instruction halt;
-            halt.op = OpCode::OP_HALT;
-            prog.add(halt);
-
-            return prog;
+            
         }
+        Instruction halt;
+        halt.op = OpCode::OP_HALT;
+        prog.add(halt);
+
+        return prog;
     }
 };
 
@@ -427,12 +427,12 @@ public:
                         ins.username_operand,
                         ins.email_operand
                     );
-                    cout << updated << "row(s) updated successfully." << endl;
+                    cout << updated << " row(s) updated successfully." << endl;
                     pc++;
                     break;
                 } case OpCode::OP_DELETE_WHERE_ID: {
                     int deleted = table.delete_where_id(ins.id_operand);
-                    cout << deleted << "row(s) deleted successfully." << endl;
+                    cout << deleted << " row(s) deleted successfully." << endl;
                     pc++;
                     break;
                 } case OpCode::OP_HALT: {
@@ -461,6 +461,8 @@ public:
     bool handle_input(const string &line) {
         string trimmed = line;
         trim(trimmed);
+        if (trimmed.empty()) return true;
+        
         if(trimmed[0] == '.') {
             if (trimmed == ".exit") {
                 cout << "Exiting Program.";
