@@ -18,17 +18,170 @@ public:
     Row(int _id, const string &_u, const string &_e): id(_id), username(_u), email(_e) {}
 };
 
+
+class BTreeNode {
+public:
+    bool leaf;
+    int n;
+    vector<int> keys;
+    vector<int> values;
+    vector<BTreeNode*> children;
+
+    BTreeNode(int t, bool leaf): 
+        leaf(leaf), 
+        n(0), 
+        keys(2*t-1), 
+        values(2*t-1), 
+        children(2*t, nullptr) {
+    }
+};
+
+class BTreeIndex {
+private:
+    BTreeNode* root;
+    int t;
+
+    static void free_node(BTreeNode* node) {
+        if (!node) return;
+        if (!node->leaf) {
+            for (BTreeNode* child: node->children) {
+                if (child) free_node(child);
+            }
+        }
+        delete node;
+    }
+
+    bool search_internal(BTreeNode* node, int key, int &row_index_out) const {
+        if (!node) return false;
+        int i = 0;
+        while (i < node->n && key > node->keys[i]) i++;
+        if (i < node->n && key == node->keys[i]) {
+            row_index_out = node->values[i];
+            return true;
+        }
+        if (node->leaf) return false;
+        return search_internal(node->children[i], key, row_index_out);
+    }
+
+    void split_child(BTreeNode* parent, int i, BTreeNode* y) {
+        BTreeNode* z = new BTreeNode(t, y->leaf);
+        z->n = t-1;
+
+        for (int j = 0; j < t-1; j++) {
+            z->keys[j] = y->keys[j+t];
+            z->values[j] = y->values[j+t];
+        }
+        
+        if (!y->leaf) {
+            for (int j = 0; j < t; j++) {
+                z->children[j] = y->children[j+t];
+            }
+        }
+
+        y->n = t-1;
+
+        for (int j = parent->n; j >= i+1; j--) {
+            parent->children[j+1] = parent->children[j];
+        }
+        parent->children[i+1] = z;
+
+        for (int j = parent->n - 1; j >= i; j--) {
+            parent->keys[j+1] = parent->keys[j];
+            parent->values[j+1] = parent->values[j];
+        }
+
+        parent->keys[i] = y->keys[t-1];
+        parent->values[i] = y->values[t-1];
+        parent->n += 1;
+    }
+
+    void insert_non_full(BTreeNode* node, int key, int row_index) {
+        int i = node->n - 1;
+        if (node->leaf) {
+            while (i >= 0 && key < node->keys[i]) {
+                node->keys[i+1] = node->keys[i];
+                node->values[i+1] = node->values[i];
+                i--;
+            }
+            node->keys[i+1] = key;
+            node->values[i+1] = row_index;
+
+            node->n += 1;
+        } else {
+            while (i >= 0 && key < node->keys[i]) i--;
+            i++;
+
+            if (node->children[i]->n == 2*t-1) {
+                split_child(node, i, node->children[i]);
+                if (key > node->keys[i]) i++;
+            }
+            insert_non_full(node->children[i], key, row_index);
+        }
+    }
+
+public:
+    BTreeIndex(int t_min = 3): root(nullptr), t(t_min) {}
+
+    ~BTreeIndex() {
+        clear();
+    }
+
+    void clear() {
+        free_node(root);
+        root = nullptr;
+    }
+
+    void build_from_rows(const vector<Row> &rows) {
+        clear();
+        for (int i = 0; i < (int)rows.size(); i++) {
+            insert(rows[i].id, i);
+        }
+    }
+
+    bool search(int key, int &row_index_out) const {
+        return search_internal(root, key, row_index_out);
+    }
+
+    void insert(int key, int row_index) {
+        if (root == nullptr) {
+            root = new BTreeNode(t, true);
+            root->keys[0] = key;
+            root->values[0] = row_index;
+            root->n = 1;
+            return;
+        }
+
+        if (root->n == 2*t-1) {
+            BTreeNode* s = new BTreeNode(t, false);
+            s->children[0] = root;
+            split_child(s, 0, root);
+            int i = 0;
+            if (key > s->keys[0]) i++;
+            insert_non_full(s->children[i], key, row_index);
+            root = s;
+        } else {
+            insert_non_full(root, key, row_index);
+        }
+    }
+};
+
 class Table {
 private:
     vector<Row> rows;
     size_t max_rows;
+    BTreeIndex index;
 
 public:
-    Table(size_t maxRows = 1000) : max_rows(maxRows) {}
+    Table(size_t maxRows = 1000) : max_rows(maxRows), index(3) {}
+
+    void rebuild_index() {
+        index.build_from_rows(rows);
+    }
 
     bool insert_row(const Row &r) {
         if (rows.size() >= max_rows) return false;
         rows.push_back(r);
+        index.insert(r.id, (int)rows.size()-1);
         return true;
     }
 
@@ -40,11 +193,15 @@ public:
     }
 
     int select_where_id(int id) const {
+        int row_idx;
+        bool found = index.search(id, row_idx);
         int count = 0;
-        for (const auto &r: rows) {
-            if (r.id == id) {
+
+        if (found) {
+            if (row_idx >= 0 && row_idx < (int)rows.size()) {
+                const auto &r = rows[row_idx];
                 cout << "(" << r.id << ", " << r.username << ", " << r.email << ")\n";
-                count++;
+                count = 1;
             }
         }
         cout << "Rows: " << count << endl;
@@ -52,28 +209,41 @@ public:
     }
 
     int delete_where_id (int id) {
-        int deleted = 0;
-        for (size_t i = 0; i < rows.size(); ) {
-            if (rows[i].id == id) {
-                rows.erase(rows.begin() + i);
-                deleted++;
-            } else {
-                i++;
-            }
+        int row_idx;
+        bool found = index.search(id, row_idx);
+
+        if (!found) {
+            cout << "Rows: 0" << endl;
+            return 0;
         }
-        return deleted; 
+        if (row_idx < 0 || row_idx >= (int)rows.size()) {
+            cout << "Rows: 0" << endl;
+            return 0;
+        }
+
+        rows.erase(rows.begin()+row_idx);
+        rebuild_index();
+        cout << "Rows: 1" << endl;
+        return 1;
     }
 
     int update_where_id (int id, const string &new_username, const string &new_email) {
-        int updated = 0;
-        for (auto &r: rows) {
-            if (r.id == id) {
-                r.username = new_username;
-                r.email = new_email;
-                updated++;
-            }
+        int row_idx;
+        bool found = index.search(id, row_idx);
+        if (!found) {
+            cout << "0 row(s) updated successfully." << endl;
+            return 0;
         }
-        return updated;
+        if (row_idx < 0 || row_idx >= (int)rows.size()) {
+            cout << "0 row(s) updated successfully." << endl;
+            return 0;
+        }
+
+        rows[row_idx].username = new_username;
+        rows[row_idx].email = new_email;
+
+        cout << "1 row(s) updated successfully." << endl;
+        return 1;
     }
 
     bool save_to_file(const string &path) const {
@@ -133,6 +303,7 @@ public:
             rows.push_back(r);
         }
 
+        rebuild_index();
         return true;
     }
 };
