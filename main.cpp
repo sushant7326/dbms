@@ -124,3 +124,42 @@ public:
         return tokens;
     } 
 };
+
+enum class StatementType {
+    INSERT,
+    SELECT,
+    DELETE_STMT,
+    UPDATE,
+    INVALID
+};
+
+struct InsertStatement {
+    int id{};
+    string username;
+    string email;
+};
+
+struct SelectStatement {
+    bool has_where{false};
+    int where_id{};
+};
+
+struct DeleteStatement {
+    bool has_where{false};
+    int where_id{};
+};
+
+struct UpdateStatement {
+    bool has_where{false};
+    int where_id{};
+    string new_username;
+    string new_email;
+};
+
+struct Statement {
+    StatementType type{StatementType::INVALID};
+    InsertStatement insertStmt;
+    SelectStatement selectStmt;
+    DeleteStatement deleteStmt;
+    UpdateStatement updateStmt;
+};
