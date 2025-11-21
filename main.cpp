@@ -442,3 +442,64 @@ public:
         }
     }
 };
+
+class DatabaseEngine {
+private:
+    Table table;
+
+    static void trim(string &s) {
+        size_t start = 0;
+        while(start < s.size() && isspace(static_cast<unsigned char>(s[start]))) start++;
+        size_t end = s.size();
+        while(end > start && isspace(static_cast<unsigned char>(s[end - 1]))) end--;
+        s = s.substr(start, end-start);
+    }
+
+public:
+    DatabaseEngine(): table(1000) {}
+
+    bool handle_input(const string &line) {
+        string trimmed = line;
+        trim(trimmed);
+        if(trimmed[0] == '.') {
+            if (trimmed == ".exit") {
+                cout << "Bye!";
+                return false;
+            } else {
+                cout << "Unrecognised meta-command: " << trimmed << endl;
+                return true; 
+            }
+        }
+
+        Tokenizer tokenizer(trimmed);
+        const vector<Token> &tokens = tokenizer.tokensize();
+
+        Parser parser(tokens);
+        Statement stmt = parser.parse_statement();
+        if (stmt.type == StatementType::INVALID) {
+            cout << "Syntax Error!" << endl;
+            return true;
+        }
+
+        Program prog = Compiler::compile(stmt);
+        VirtualMachine vm(table);
+        vm.execute(prog);
+
+        return true;
+    }
+};
+
+class REPL {
+private:
+    DatabaseEngine engine;
+
+public:
+    void run() {
+        while (true) {
+            cout << "db > ";
+            string line;
+            if (!getline(cin, line)) break;
+            if (!engine.handle_input(line)) break;
+        }
+    }
+};
