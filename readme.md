@@ -2,10 +2,10 @@
 
 ### INSERT
 ```bash
-db > INSERT 1 sushant sushant@123.com
+db > INSERT sushant sushant@123.com
 Row insertion successful.
 
-db > INSERT 2 singh singh@123.com
+db > INSERT singh singh@123.com
 Row insertion successful.
 ```
 
