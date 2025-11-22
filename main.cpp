@@ -304,9 +304,10 @@ private:
     vector<Row> rows;
     size_t max_rows;
     BTreeIndex index;
+    int next_id;
 
 public:
-    Table(size_t maxRows = 1000) : max_rows(maxRows), index(3) {}
+    Table(size_t maxRows = 1000) : max_rows(maxRows), index(3), next_id(1) {}
 
     void rebuild_index() {
         index.build_from_rows(rows);
@@ -316,6 +317,22 @@ public:
         if (rows.size() >= max_rows) return false;
         rows.push_back(r);
         index.insert(r.id, (int)rows.size()-1);
+        return true;
+    }
+    
+    bool insert_autoincrement(const string &username, const string &email) {
+        Row r(next_id, username, email);
+        bool ok = insert_row(r);
+        if (!ok) {
+            return false;
+        }
+
+        if (next_id == INT_MAX) {
+            next_id = 1;
+        } else {
+            next_id++;
+        }
+
         return true;
     }
 
@@ -410,6 +427,7 @@ public:
         if (file_len < PAGE_SIZE) {
             rows.clear();
             index.clear();
+            next_id = 1;
             return false;
         }
 
@@ -419,6 +437,7 @@ public:
 
         if (row_count == 0) {
             rows.clear();
+            next_id = 1;
             index.clear();
             return true;
         }
@@ -445,6 +464,20 @@ public:
         }
 
         rebuild_index();
+        if (rows.empty()) {
+            next_id = 1;
+        } else {
+            int max_id = rows[0].id;
+            for (const auto &r: rows) {
+                if (r.id > max_id) {
+                    max_id = r.id;
+                }
+            }
+            if (max_id < 0) {
+                max_id = 0;
+            }
+            next_id = max_id + 1;
+        }
         return true;
     }
 };
@@ -580,10 +613,6 @@ private:
     }
 
     void parse_insert(InsertStatement &ins) {
-        if (!expect_number(ins.id)) {
-            ins.id = -1;
-            return;
-        }
         if (!expect_identifier(ins.username)) {
             return;
         }
@@ -715,7 +744,7 @@ public:
             case StatementType::INSERT: {
                 Instruction ins;
                 ins.op = OpCode::OP_INSERT;
-                ins.id_operand = stmt.insertStmt.id;
+                ins.id_operand = 0;
                 ins.username_operand = stmt.insertStmt.username;
                 ins.email_operand = stmt.insertStmt.email;
                 prog.add(ins);
@@ -776,8 +805,8 @@ public:
             const Instruction &ins = prog.code[pc];
             switch (ins.op) {
                 case OpCode::OP_INSERT: {
-                    Row r(ins.id_operand, ins.username_operand, ins.email_operand);
-                    bool ok = table.insert_row(r);
+                    
+                    bool ok = table.insert_autoincrement(ins.username_operand, ins.email_operand);;
                     if (ok) {
                         cout << "Row insertion successful." << endl;
                     } else {
