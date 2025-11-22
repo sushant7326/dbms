@@ -18,6 +18,50 @@ public:
     Row(int _id, const string &_u, const string &_e): id(_id), username(_u), email(_e) {}
 };
 
+const uint32_t PAGE_SIZE = 4096;
+const uint32_t ID_SIZE = sizeof(int32_t);
+const uint32_t USERNAME_SIZE = 32;
+const uint32_t EMAIL_SIZE = 92;
+const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
+const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
+
+void serialize_row (const Row &source, void *destination) {
+    char *dest = static_cast<char*>(destination);
+
+    memcpy(dest, &source.id, ID_SIZE);
+    dest += ID_SIZE;
+
+    string u = source.username;
+    if (u.size() > USERNAME_SIZE) u = u.substr(0, USERNAME_SIZE);
+    memset(dest, 0, USERNAME_SIZE);
+    memcpy(dest, u.data(), u.size());
+    dest += USERNAME_SIZE;
+
+    string e = source.email;
+    if (e.size() > EMAIL_SIZE) e = e.substr(0, EMAIL_SIZE);
+    memset(dest, 0, EMAIL_SIZE);
+    memcpy(dest, e.data(), e.size());
+}
+
+void deserialize_row(const void *source, Row &dest_row) {
+    const char *src = static_cast<const char*>(source);
+
+    memcpy(&dest_row.id, src, ID_SIZE);
+    src += ID_SIZE;
+
+    dest_row.username.assign(src, USERNAME_SIZE);
+    auto it_u = find(dest_row.username.begin(), dest_row.username.end(), '\0');
+    if (it_u != dest_row.username.end()) {
+        dest_row.username.erase(it_u, dest_row.username.end());
+    }
+
+    src += USERNAME_SIZE;
+    dest_row.email.assign(src, EMAIL_SIZE);
+    auto it_e = find(dest_row.email.begin(), dest_row.email.end(), '\0');
+    if (it_e != dest_row.email.end()) {
+        dest_row.email.erase(it_e, dest_row.email.end());
+    }
+}
 
 class BTreeNode {
 public:
@@ -165,6 +209,96 @@ public:
     }
 };
 
+class Pager {
+private:
+    string filename;
+    fstream file;
+    vector<unique_ptr<char[]>> pages;
+    uint32_t num_pages_loaded = 0;
+    size_t file_length = 0;
+    bool write_mode;
+
+public:
+    Pager(const string &path, bool write): filename(path), write_mode(write) {
+        if (write_mode) {
+            file.open(filename, ios::binary | ios::out | ios::trunc);
+            if (!file) {
+                cerr << "Error: cannot open file for writing: " << filename << endl;
+                return;
+            }
+            file_length = 0;
+        } else {
+            file.open(filename, ios::binary | ios::in);
+            if (!file) {
+                file_length = 0;
+                return;
+            }
+            file.seekg(0, ios::end);
+            file_length = static_cast<size_t>(file.tellg());
+            file.seekg(0, ios::beg);
+        }
+        pages.resize(0);
+    }
+
+    ~Pager() {
+        if (file.is_open()) {
+            file.flush();
+            file.close();
+        }
+    }
+
+    size_t get_file_length() const {
+        return file_length;
+    }
+
+    char* get_page(uint32_t page_num) {
+        if (page_num >= pages.size()) {
+            pages.resize(page_num+1);
+        }
+        if (!pages[page_num]) {
+            pages[page_num] = unique_ptr<char[]>(new char[PAGE_SIZE]);
+            memset(pages[page_num].get(), 0, PAGE_SIZE);
+
+            if (!write_mode && file.is_open()) {
+                size_t offset = static_cast<size_t>(page_num) * PAGE_SIZE;
+                if (offset < file_length) {
+                    file.seekg(offset, ios::beg);
+                    file.read(pages[page_num].get(), PAGE_SIZE);
+                }
+            }
+        }
+        if (page_num+1 > num_pages_loaded) {
+            num_pages_loaded = page_num+1;
+        }
+        return pages[page_num].get();
+    }
+
+
+    void flush_page(uint32_t page_num) {
+        if (!write_mode) return;
+        if (page_num >= pages.size()) return;
+        if (!pages[page_num]) return;
+        if (!file.is_open()) return;
+
+        size_t offset = static_cast<size_t>(page_num) * PAGE_SIZE;
+        file.seekp(offset, ios::beg);
+        file.write(pages[page_num].get(), PAGE_SIZE);
+
+        size_t end_pos = offset + PAGE_SIZE;
+        if (end_pos > file_length) {
+            file_length = end_pos;
+        }
+    }
+
+    void flush_all() {
+        if (!write_mode) return;
+        for (uint32_t i = 0; i < num_pages_loaded; i++) {
+            flush_page(i);
+        }
+        if (file.is_open()) file.flush();
+    }
+};
+
 class Table {
 private:
     vector<Row> rows;
@@ -247,59 +381,66 @@ public:
     }
 
     bool save_to_file(const string &path) const {
-        ofstream out(path, ios::binary | ios::trunc);
-        if (!out) {
-            cout << "Warning: could not open file for saving: " << path << endl;
-            return false;
+        Pager pager(path, true);
+
+        char *header = pager.get_page(0);
+        uint64_t row_count = static_cast<uint64_t>(rows.size());
+        memset(header, 0, PAGE_SIZE);
+        memcpy(header, &row_count, sizeof(row_count));
+
+        for (size_t i = 0; i < rows.size(); i++) {
+            size_t rows_byte_offset = i * static_cast<size_t>(ROW_SIZE);
+            size_t global_offset    = PAGE_SIZE + rows_byte_offset;
+
+            uint32_t page_num = static_cast<uint32_t>(global_offset / PAGE_SIZE);
+            uint32_t page_off = static_cast<uint32_t>(global_offset % PAGE_SIZE);
+
+            char *page = pager.get_page(page_num);
+            serialize_row(rows[i], page + page_off);
         }
 
-        size_t n = rows.size();
-        out.write(reinterpret_cast<const char*>(&n), sizeof(n));
-
-        for (const auto &r: rows) {
-            out.write(reinterpret_cast<const char*>(&r.id), sizeof(r.id));
-
-            uint32_t lenU = static_cast<uint32_t>(r.username.size());
-            uint32_t lenE = static_cast<uint32_t>(r.email.size());
-
-            out.write(reinterpret_cast<const char*>(&lenU), sizeof(lenU));
-            out.write(r.username.data(), lenU);
-            
-            out.write(reinterpret_cast<const char*>(&lenE), sizeof(lenE));
-            out.write(r.email.data(), lenE);
-        }
-
+        pager.flush_all();
         return true;
     }
 
     bool load_from_file(const string &path) {
-        ifstream in(path, ios::binary);
-        if (!in) {
+        Pager pager(path, false);
+        size_t file_len = pager.get_file_length();
+
+        if (file_len < PAGE_SIZE) {
+            rows.clear();
+            index.clear();
             return false;
+        }
+
+        char *header = pager.get_page(0);
+        uint64_t row_count = 0;
+        memcpy(&row_count, header, sizeof(row_count));
+
+        if (row_count == 0) {
+            rows.clear();
+            index.clear();
+            return true;
+        }
+
+        size_t total_rows = static_cast<size_t>(row_count);
+        if (total_rows > max_rows) {
+            total_rows = max_rows;
         }
 
         rows.clear();
-        size_t n = 0;
-        if (!in.read(reinterpret_cast<char*>(&n), sizeof(n))) {
-            return false;
-        }
+        rows.reserve(total_rows);
 
-        n = min(n, max_rows);
+        for (size_t i = 0; i < total_rows; i++) {
+            size_t rows_byte_offset = i * static_cast<size_t>(ROW_SIZE);
+            size_t global_offset    = PAGE_SIZE + rows_byte_offset;
 
-        for (size_t i = 0; i < n; i++) {
+            uint32_t page_num = static_cast<uint32_t>(global_offset / PAGE_SIZE);
+            uint32_t page_off = static_cast<uint32_t>(global_offset % PAGE_SIZE);
+
+            char *page = pager.get_page(page_num);
             Row r;
-            if (!in.read(reinterpret_cast<char*>(&r.id), sizeof(r.id))) break;
-
-            uint32_t lenU = 0, lenE = 0;
-            
-            if (!in.read(reinterpret_cast<char*>(&lenU), sizeof(lenU))) break;
-            r.username.resize(lenU);
-            if (!in.read(&r.username[0], lenU)) break;
-
-            if (!in.read(reinterpret_cast<char*>(&lenE), sizeof(lenE))) break;
-            r.email.resize(lenE);
-            if (!in.read(&r.email[0], lenE)) break;
-
+            deserialize_row(page + page_off, r);
             rows.push_back(r);
         }
 
