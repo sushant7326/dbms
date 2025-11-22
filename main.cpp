@@ -14,7 +14,6 @@ public:
     string email;
 
     Row() = default;
-
     Row(int _id, const string &_u, const string &_e): id(_id), username(_u), email(_e) {}
 };
 
@@ -24,6 +23,7 @@ const uint32_t USERNAME_SIZE = 32;
 const uint32_t EMAIL_SIZE = 92;
 const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
 const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
+const size_t MAX_ROWS = 1000;
 
 void serialize_row (const Row &source, void *destination) {
     char *dest = static_cast<char*>(destination);
@@ -31,16 +31,14 @@ void serialize_row (const Row &source, void *destination) {
     memcpy(dest, &source.id, ID_SIZE);
     dest += ID_SIZE;
 
-    string u = source.username;
-    if (u.size() > USERNAME_SIZE) u = u.substr(0, USERNAME_SIZE);
+    size_t u_len = min(source.username.size(), (size_t)USERNAME_SIZE);
     memset(dest, 0, USERNAME_SIZE);
-    memcpy(dest, u.data(), u.size());
+    memcpy(dest, source.username.data(), u_len);
     dest += USERNAME_SIZE;
 
-    string e = source.email;
-    if (e.size() > EMAIL_SIZE) e = e.substr(0, EMAIL_SIZE);
+    size_t e_len = min(source.email.size(), (size_t)EMAIL_SIZE);
     memset(dest, 0, EMAIL_SIZE);
-    memcpy(dest, e.data(), e.size());
+    memcpy(dest, source.email.data(), e_len);
 }
 
 void deserialize_row(const void *source, Row &dest_row) {
@@ -76,8 +74,7 @@ public:
         n(0), 
         keys(2*t-1), 
         values(2*t-1), 
-        children(2*t, nullptr) {
-    }
+        children(2*t, nullptr) {}
 };
 
 class BTreeIndex {
@@ -149,7 +146,6 @@ private:
             }
             node->keys[i+1] = key;
             node->values[i+1] = row_index;
-
             node->n += 1;
         } else {
             while (i >= 0 && key < node->keys[i]) i--;
@@ -214,30 +210,26 @@ private:
     string filename;
     fstream file;
     vector<unique_ptr<char[]>> pages;
-    uint32_t num_pages_loaded = 0;
-    size_t file_length = 0;
+    uint32_t num_pages_loaded;
+    size_t file_length;
     bool write_mode;
 
 public:
-    Pager(const string &path, bool write): filename(path), write_mode(write) {
+    Pager(const string &path, bool write): filename(path), write_mode(write), 
+                                           num_pages_loaded(0), file_length(0) {
         if (write_mode) {
             file.open(filename, ios::binary | ios::out | ios::trunc);
             if (!file) {
                 cerr << "Error: cannot open file for writing: " << filename << endl;
-                return;
             }
-            file_length = 0;
         } else {
             file.open(filename, ios::binary | ios::in);
-            if (!file) {
-                file_length = 0;
-                return;
+            if (file) {
+                file.seekg(0, ios::end);
+                file_length = static_cast<size_t>(file.tellg());
+                file.seekg(0, ios::beg);
             }
-            file.seekg(0, ios::end);
-            file_length = static_cast<size_t>(file.tellg());
-            file.seekg(0, ios::beg);
         }
-        pages.resize(0);
     }
 
     ~Pager() {
@@ -273,12 +265,9 @@ public:
         return pages[page_num].get();
     }
 
-
     void flush_page(uint32_t page_num) {
-        if (!write_mode) return;
-        if (page_num >= pages.size()) return;
-        if (!pages[page_num]) return;
-        if (!file.is_open()) return;
+        if (!write_mode || page_num >= pages.size() || !pages[page_num] || !file.is_open()) 
+            return;
 
         size_t offset = static_cast<size_t>(page_num) * PAGE_SIZE;
         file.seekp(offset, ios::beg);
@@ -302,38 +291,26 @@ public:
 class Table {
 private:
     vector<Row> rows;
-    size_t max_rows;
     BTreeIndex index;
     int next_id;
 
 public:
-    Table(size_t maxRows = 1000) : max_rows(maxRows), index(3), next_id(1) {}
+    Table() : index(3), next_id(1) {}
 
     void rebuild_index() {
         index.build_from_rows(rows);
     }
 
     bool insert_row(const Row &r) {
-        if (rows.size() >= max_rows) return false;
+        if (rows.size() >= MAX_ROWS) return false;
         rows.push_back(r);
         index.insert(r.id, (int)rows.size()-1);
         return true;
     }
     
     bool insert_autoincrement(const string &username, const string &email) {
-        Row r(next_id, username, email);
-        bool ok = insert_row(r);
-        if (!ok) {
-            return false;
-        }
-
-        if (next_id == INT_MAX) {
-            next_id = 1;
-        } else {
-            next_id++;
-        }
-
-        return true;
+        Row r(next_id++, username, email);
+        return insert_row(r);
     }
 
     void select_all() const {
@@ -343,58 +320,39 @@ public:
         cout << "Rows: " << rows.size() << endl;
     }
 
-    int select_where_id(int id) const {
+    bool select_where_id(int id) const {
         int row_idx;
-        bool found = index.search(id, row_idx);
-        int count = 0;
-
-        if (found) {
-            if (row_idx >= 0 && row_idx < (int)rows.size()) {
-                const auto &r = rows[row_idx];
-                cout << "(" << r.id << ", " << r.username << ", " << r.email << ")\n";
-                count = 1;
-            }
+        if (!index.search(id, row_idx) || row_idx < 0 || row_idx >= (int)rows.size()) {
+            cout << "Rows: 0" << endl;
+            return false;
         }
-        cout << "Rows: " << count << endl;
-        return count;
+        
+        const auto &r = rows[row_idx];
+        cout << "(" << r.id << ", " << r.username << ", " << r.email << ")\n";
+        cout << "Rows: 1" << endl;
+        return true;
     }
 
-    int delete_where_id (int id) {
+    bool delete_where_id(int id) {
         int row_idx;
-        bool found = index.search(id, row_idx);
-
-        if (!found) {
-            cout << "Rows: 0" << endl;
-            return 0;
-        }
-        if (row_idx < 0 || row_idx >= (int)rows.size()) {
-            cout << "Rows: 0" << endl;
-            return 0;
+        if (!index.search(id, row_idx) || row_idx < 0 || row_idx >= (int)rows.size()) {
+            return false;
         }
 
         rows.erase(rows.begin()+row_idx);
         rebuild_index();
-        cout << "Rows: 1" << endl;
-        return 1;
+        return true;
     }
 
-    int update_where_id (int id, const string &new_username, const string &new_email) {
+    bool update_where_id(int id, const string &new_username, const string &new_email) {
         int row_idx;
-        bool found = index.search(id, row_idx);
-        if (!found) {
-            cout << "0 row(s) updated successfully." << endl;
-            return 0;
-        }
-        if (row_idx < 0 || row_idx >= (int)rows.size()) {
-            cout << "0 row(s) updated successfully." << endl;
-            return 0;
+        if (!index.search(id, row_idx) || row_idx < 0 || row_idx >= (int)rows.size()) {
+            return false;
         }
 
         rows[row_idx].username = new_username;
         rows[row_idx].email = new_email;
-
-        cout << "1 row(s) updated successfully." << endl;
-        return 1;
+        return true;
     }
 
     bool save_to_file(const string &path) const {
@@ -407,7 +365,7 @@ public:
 
         for (size_t i = 0; i < rows.size(); i++) {
             size_t rows_byte_offset = i * static_cast<size_t>(ROW_SIZE);
-            size_t global_offset    = PAGE_SIZE + rows_byte_offset;
+            size_t global_offset = PAGE_SIZE + rows_byte_offset;
 
             uint32_t page_num = static_cast<uint32_t>(global_offset / PAGE_SIZE);
             uint32_t page_off = static_cast<uint32_t>(global_offset % PAGE_SIZE);
@@ -442,17 +400,13 @@ public:
             return true;
         }
 
-        size_t total_rows = static_cast<size_t>(row_count);
-        if (total_rows > max_rows) {
-            total_rows = max_rows;
-        }
-
+        size_t total_rows = min((size_t)row_count, MAX_ROWS);
         rows.clear();
         rows.reserve(total_rows);
 
         for (size_t i = 0; i < total_rows; i++) {
             size_t rows_byte_offset = i * static_cast<size_t>(ROW_SIZE);
-            size_t global_offset    = PAGE_SIZE + rows_byte_offset;
+            size_t global_offset = PAGE_SIZE + rows_byte_offset;
 
             uint32_t page_num = static_cast<uint32_t>(global_offset / PAGE_SIZE);
             uint32_t page_off = static_cast<uint32_t>(global_offset % PAGE_SIZE);
@@ -464,19 +418,15 @@ public:
         }
 
         rebuild_index();
-        if (rows.empty()) {
-            next_id = 1;
-        } else {
+        
+        if (!rows.empty()) {
             int max_id = rows[0].id;
             for (const auto &r: rows) {
-                if (r.id > max_id) {
-                    max_id = r.id;
-                }
+                if (r.id > max_id) max_id = r.id;
             }
-            if (max_id < 0) {
-                max_id = 0;
-            }
-            next_id = max_id + 1;
+            next_id = max(1, max_id + 1);
+        } else {
+            next_id = 1;
         }
         return true;
     }
@@ -499,13 +449,11 @@ private:
     vector<Token> tokens;
 
     void add_token(const string &s) {
-        bool is_number = !s.empty() && all_of(s.begin(), s.end(), [](char c) { return isdigit( static_cast<unsigned char>(c)); });
+        bool is_number = !s.empty() && all_of(s.begin(), s.end(), [](char c) { 
+            return isdigit(static_cast<unsigned char>(c)); 
+        });
 
-        if (is_number) {
-            tokens.push_back({TokenType::NUMBER, s});
-        } else {
-            tokens.push_back({TokenType::IDENTIFIER, s});
-        }
+        tokens.push_back({is_number ? TokenType::NUMBER : TokenType::IDENTIFIER, s});
     }
 
 public:
@@ -515,8 +463,7 @@ public:
         tokens.clear();
         string current;
 
-        for (size_t i = 0; i < input.size(); i++) {
-            char c = input[i];
+        for (char c : input) {
             if (isspace(static_cast<unsigned char>(c))) {
                 if (!current.empty()) {
                     add_token(current);
@@ -545,7 +492,6 @@ enum class StatementType {
 };
 
 struct InsertStatement {
-    int id{};
     string username;
     string email;
 };
@@ -590,8 +536,7 @@ private:
 
     bool match_identifier_ci(const string &expected) {
         if (current().type != TokenType::IDENTIFIER) return false;
-        string got = to_lower_copy(current().text);
-        if (got == expected) {
+        if (to_lower_copy(current().text) == expected) {
             advance();
             return true;
         }
@@ -612,60 +557,45 @@ private:
         return true;
     }
 
-    void parse_insert(InsertStatement &ins) {
-        if (!expect_identifier(ins.username)) {
-            return;
-        }
-        if (!expect_identifier(ins.email)) {
-            return;
-        }
+    bool parse_insert(InsertStatement &ins) {
+        if (!expect_identifier(ins.username)) return false;
+        if (!expect_identifier(ins.email)) return false;
+        return true;
     }
 
     void parse_select(SelectStatement &sel) {
         sel.has_where = false;
-
-        if (match_identifier_ci("where")) {
-            if (!match_identifier_ci("id")) return;
-            if (!match_identifier_ci("=")) return;
-
+        if (match_identifier_ci("where") && match_identifier_ci("id") && match_identifier_ci("=")) {
             int value;
-            if (!expect_number(value)) return;
-            sel.has_where = true;
-            sel.where_id = value;
+            if (expect_number(value)) {
+                sel.has_where = true;
+                sel.where_id = value;
+            }
         }
     }
 
     void parse_delete(DeleteStatement &del) {
         del.has_where = false;
-
-        if (match_identifier_ci("where")) {
-            if (!match_identifier_ci("id")) return;
-            if (!match_identifier_ci("=")) return;
-
+        if (match_identifier_ci("where") && match_identifier_ci("id") && match_identifier_ci("=")) {
             int value;
-            if (!expect_number(value)) return;
-            del.has_where = true;
-            del.where_id = value;
+            if (expect_number(value)) {
+                del.has_where = true;
+                del.where_id = value;
+            }
         }
     }
 
     void parse_update(UpdateStatement &upd) {
         upd.has_where = false;
-
-        if (match_identifier_ci("where")) {
-            if (!match_identifier_ci("id")) return;
-            if (!match_identifier_ci("=")) return;
-
+        if (match_identifier_ci("where") && match_identifier_ci("id") && match_identifier_ci("=")) {
             int value;
-            if (!expect_number(value)) return;
-            upd.has_where = true;
-            upd.where_id = value;
-        } else {
-            return;
+            if (expect_number(value)) {
+                upd.has_where = true;
+                upd.where_id = value;
+                expect_identifier(upd.new_username);
+                expect_identifier(upd.new_email);
+            }
         }
-
-        if (!expect_identifier(upd.new_username)) return;
-        if (!expect_identifier(upd.new_email)) return;
     }
 
 public:
@@ -674,36 +604,27 @@ public:
     Statement parse_statement() {
         Statement stmt;
 
-        if (current().type == TokenType::END_OF_INPUT) {
-            stmt.type = StatementType::INVALID;
-            return stmt;
-        }
-
         if (current().type != TokenType::IDENTIFIER) {
-            stmt.type = StatementType::INVALID;
             return stmt;
         }
 
         string first = to_lower_copy(current().text);
+        advance();
 
         if (first == "insert") {
-            advance();
             stmt.type = StatementType::INSERT;
-            parse_insert(stmt.insertStmt);
+            if (!parse_insert(stmt.insertStmt)) {
+                stmt.type = StatementType::INVALID;
+            }
         } else if (first == "select") {
-            advance();
             stmt.type = StatementType::SELECT;
             parse_select(stmt.selectStmt);
         } else if (first == "delete") {
-            advance();
             stmt.type = StatementType::DELETE_STMT;
             parse_delete(stmt.deleteStmt);
         } else if (first == "update") {
-            advance();
             stmt.type = StatementType::UPDATE;
             parse_update(stmt.updateStmt);
-        } else {
-            stmt.type = StatementType::INVALID;
         }
 
         return stmt;
@@ -741,53 +662,32 @@ public:
         Program prog;
 
         switch (stmt.type) {
-            case StatementType::INSERT: {
-                Instruction ins;
-                ins.op = OpCode::OP_INSERT;
-                ins.id_operand = 0;
-                ins.username_operand = stmt.insertStmt.username;
-                ins.email_operand = stmt.insertStmt.email;
-                prog.add(ins);
+            case StatementType::INSERT:
+                prog.add({OpCode::OP_INSERT, 0, stmt.insertStmt.username, stmt.insertStmt.email});
                 break;
-            } case StatementType::SELECT: {
+            case StatementType::SELECT:
                 if (stmt.selectStmt.has_where) {
-                    Instruction ins;
-                    ins.op = OpCode::OP_SELECT_WHERE_ID;
-                    ins.id_operand = stmt.selectStmt.where_id;
-                    prog.add(ins);
+                    prog.add({OpCode::OP_SELECT_WHERE_ID, stmt.selectStmt.where_id});
                 } else {
-                    Instruction ins;
-                    ins.op = OpCode::OP_SELECT_ALL;
-                    prog.add(ins);
+                    prog.add({OpCode::OP_SELECT_ALL});
                 }
                 break;
-            } case StatementType::DELETE_STMT: {
+            case StatementType::DELETE_STMT:
                 if (stmt.deleteStmt.has_where) {
-                    Instruction ins;
-                    ins.op = OpCode::OP_DELETE_WHERE_ID;
-                    ins.id_operand = stmt.deleteStmt.where_id;
-                    prog.add(ins);
+                    prog.add({OpCode::OP_DELETE_WHERE_ID, stmt.deleteStmt.where_id});
                 }
                 break;
-            } case StatementType::UPDATE: {
+            case StatementType::UPDATE:
                 if (stmt.updateStmt.has_where) {
-                    Instruction ins;
-                    ins.op = OpCode::OP_UPDATE_WHERE_ID;
-                    ins.id_operand = stmt.updateStmt.where_id;
-                    ins.username_operand = stmt.updateStmt.new_username;
-                    ins.email_operand = stmt.updateStmt.new_email;
-                    prog.add(ins);
+                    prog.add({OpCode::OP_UPDATE_WHERE_ID, stmt.updateStmt.where_id, 
+                             stmt.updateStmt.new_username, stmt.updateStmt.new_email});
                 }
                 break;
-            } default: {
+            default:
                 break;
-            }
-            
         }
-        Instruction halt;
-        halt.op = OpCode::OP_HALT;
-        prog.add(halt);
-
+        
+        prog.add({OpCode::OP_HALT});
         return prog;
     }
 };
@@ -800,45 +700,42 @@ public:
     VirtualMachine(Table &t): table(t) {}
 
     void execute(const Program &prog) {
-        size_t pc = 0;
-        while (pc < prog.code.size()) {
-            const Instruction &ins = prog.code[pc];
+        for (const auto &ins : prog.code) {
             switch (ins.op) {
-                case OpCode::OP_INSERT: {
-                    
-                    bool ok = table.insert_autoincrement(ins.username_operand, ins.email_operand);;
-                    if (ok) {
+                case OpCode::OP_INSERT:
+                    if (table.insert_autoincrement(ins.username_operand, ins.email_operand)) {
                         cout << "Row insertion successful." << endl;
                     } else {
                         cout << "Error: Table full, row insertion failed." << endl;
                     }
-                    pc++;
                     break;
-                } case OpCode::OP_SELECT_ALL: {
+                    
+                case OpCode::OP_SELECT_ALL:
                     table.select_all();
-                    pc++;
                     break;
-                } case OpCode::OP_SELECT_WHERE_ID: {
+                    
+                case OpCode::OP_SELECT_WHERE_ID:
                     table.select_where_id(ins.id_operand);
-                    pc++;
                     break;
-                } case OpCode::OP_UPDATE_WHERE_ID: {
-                    int updated = table.update_where_id(
-                        ins.id_operand,
-                        ins.username_operand,
-                        ins.email_operand
-                    );
-                    cout << updated << " row(s) updated successfully." << endl;
-                    pc++;
+                    
+                case OpCode::OP_UPDATE_WHERE_ID:
+                    if (table.update_where_id(ins.id_operand, ins.username_operand, ins.email_operand)) {
+                        cout << "1 row(s) updated successfully." << endl;
+                    } else {
+                        cout << "0 row(s) updated successfully." << endl;
+                    }
                     break;
-                } case OpCode::OP_DELETE_WHERE_ID: {
-                    int deleted = table.delete_where_id(ins.id_operand);
-                    cout << deleted << " row(s) deleted successfully." << endl;
-                    pc++;
+                    
+                case OpCode::OP_DELETE_WHERE_ID:
+                    if (table.delete_where_id(ins.id_operand)) {
+                        cout << "1 row(s) deleted successfully." << endl;
+                    } else {
+                        cout << "0 row(s) deleted successfully." << endl;
+                    }
                     break;
-                } case OpCode::OP_HALT: {
+                    
+                case OpCode::OP_HALT:
                     return;
-                }
             }
         }
     }
@@ -858,7 +755,7 @@ private:
     }
 
 public:
-    DatabaseEngine(const string &file = "db.data"): table(1000) , filename(file) {
+    DatabaseEngine(const string &file = "db.data"): filename(file) {
         table.load_from_file(filename);
     }
 
@@ -872,17 +769,15 @@ public:
                 table.save_to_file(filename);
                 cout << "Exiting Program.";
                 return false;
-            } else {
-                cout << "Unrecognised meta-command: " << trimmed << endl;
-                return true; 
             }
+            cout << "Unrecognised meta-command: " << trimmed << endl;
+            return true;
         }
 
         Tokenizer tokenizer(trimmed);
-        const vector<Token> &tokens = tokenizer.tokensize();
-
-        Parser parser(tokens);
+        Parser parser(tokenizer.tokensize());
         Statement stmt = parser.parse_statement();
+        
         if (stmt.type == StatementType::INVALID) {
             cout << "Syntax Error!" << endl;
             return true;
